@@ -128,6 +128,7 @@ EOF
 
     # Function: allow optional leading ws, optional "function", optional "()"
     /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)?[ \t]*\{/ {
+      flush_current()
       line=$0
       sub(/^[ \t]*/, "", line)
       sub(/^function[ \t]+/, "", line)
@@ -136,7 +137,6 @@ EOF
       } else {
         cur_name = ""
       }
-      flush_current()
       cur_kind="function"; cur_def=$0
       cur_doc = next_doc; next_doc=""
       next
