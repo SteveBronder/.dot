@@ -1,0 +1,149 @@
+##! [util] iforgot
+##! Desc: List documented aliases/functions or show details for one.
+##! Usage:
+##!   iforgot                 # show all with one-line summaries
+##!   iforgot <name>          # show full doc and definition for <name>
+##!   iforgot -f <tag>        # show only entries with the given tag
+##!   iforgot --help          # show help for iforgot
+##! Doc comments:
+##!   - Prefix each doc line with `##!` (leading indentation is fine).
+##!   - Keep the block immediately above the alias/function it documents.
+##!   - First line: `[tag] name` (tag optional, but recommended).
+##!   - Second line: `Desc: short description`.
+##!   - Follow with usage/examples/notes on later lines.
+##! Output columns:
+##!   - Summary view shows: <tag> <name> <summary>. Tag comes from the first line; summary comes from `Desc:`.
+iforgot() {
+  local query=""
+  local tag_filter=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --help)
+        cat <<'EOF'
+iforgot — List documented aliases/functions or show details for one.
+Usage:
+  iforgot                 # show all with one-line summaries
+  iforgot <name>          # show full doc and definition for <name>
+  iforgot -f <tag>        # show only entries with the given tag
+  iforgot --help          # show help for iforgot
+Options:
+  -f, --filter <tag>      Filter by tag (e.g., git, search, nav)
+  --help                  Show this help and exit
+Doc format:
+  [tag] name
+  Desc: short description
+  (then usage/examples/notes)
+EOF
+        return 0
+        ;;
+      -f|--filter)
+        if [[ -z "$2" ]]; then
+          echo "iforgot: missing tag for $1" >&2
+          return 1
+        fi
+        tag_filter="$2"
+        shift 2
+        continue
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        echo "iforgot: unknown option: $1" >&2
+        return 1
+        ;;
+      *)
+        query="$1"
+        shift
+        break
+        ;;
+    esac
+  done
+  # If anything remains and no query captured yet, take the next token as query
+  if [[ -z "$query" && $# -gt 0 ]]; then
+    query="$1"
+  fi
+  # Make sure these paths match your actual files
+  local files=(~/.dot/.bash_functions ~/.dot/.bash_aliases)
+
+  for f in "${files[@]}"; do
+    [[ -r "$f" ]] || continue
+  done
+
+  awk -v query="$query" -v tag_filter="$tag_filter" '
+    function print_item(kind,name,def,doc,    i,n,first,tag,first_idx,desc,tmp,doc_name,display_name) {
+      if (query && name!=query) return
+      if (!doc) doc="(no docs)"
+      gsub(/\n?[ \t]*##![ \t]*/,"\n",doc)
+      n = split(doc, lines, /\n/)
+      first_idx=0
+      for (i=1;i<=n;i++) if (length(lines[i])) { first_idx=i; break }
+      tag=""; desc=""
+      if (first_idx && match(lines[first_idx], /^\[([A-Za-z0-9_-]+)\][ \t]*(.*)$/, m)) {
+        tag = m[1]
+        doc_name = m[2]
+        lines[first_idx] = m[2]
+      }
+      for (i=(first_idx?first_idx:1); i<=n; i++) {
+        if (match(lines[i], /^[ \t]*Desc:[ \t]*(.*)$/, m)) { desc = m[1]; break }
+      }
+      if (!length(desc)) {
+        for (i=(first_idx?first_idx:1); i<=n; i++) {
+          tmp = lines[i]; sub(/^[ \t]*Desc:[ \t]*/,"", tmp)
+          if (length(tmp)) { desc = tmp; break }
+        }
+      }
+      if (!tag) tag = kind
+      if (length(tag_filter) && tolower(tag)!=tolower(tag_filter)) return
+      if (!length(desc)) desc="(no docs)"
+      display_name = name
+      if (!length(display_name)) display_name = doc_name
+      if (!length(display_name)) display_name = "(unknown)"
+      if (query && name==query) {
+        printf("%s %s (%s)\n", toupper(tag), display_name, kind)
+        for (i=1;i<=n;i++) if (length(lines[i])) printf("  %s\n", lines[i])
+        if (length(def)) printf("  Defined as: %s\n", def)
+        printf("\n")
+      } else if (!query) {
+        printf("%-10s %-16s %s\n", tag, display_name, desc)
+      }
+    }
+    function flush_current() {
+      if (cur_kind) print_item(cur_kind, cur_name, cur_def, cur_doc)
+      cur_kind=""; cur_name=""; cur_def=""; cur_doc=""
+    }
+
+    # Accumulate docs for the *next* item
+    /^[ \t]*##![ \t]*/ { next_doc = next_doc sprintf("%s\n", $0); next }
+
+    # Function: allow optional leading ws, optional "function", optional "()"
+    /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)?[ \t]*\{/ {
+      match($0, /^[ \t]*(function[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)?[ \t]*\{/, m)
+      flush_current()
+      cur_kind="function"; cur_name=m[2]; cur_def=$0
+      cur_doc = next_doc; next_doc=""
+      next
+    }
+
+    # Alias: allow leading ws
+    /^[ \t]*alias[ \t]+[A-Za-z_][A-Za-z0-9_]*=/ {
+      flush_current()
+      line=$0
+      sub(/^[ \t]*alias[ \t]+/,"", line)
+      split(line, a, "=")
+      cur_kind="alias"; cur_name=a[1]; cur_def=$0
+      cur_doc = next_doc; next_doc=""
+      next
+    }
+
+    END { flush_current() }
+  ' "${files[@]}" | {
+     if [[ -z "$query" ]]; then
+        printf "Available helpers (use '\''iforgot <name>'\'' for details):\n"
+        sort
+     else
+        cat
+     fi
+  }
+}
