@@ -72,7 +72,7 @@ EOF
   done
 
   awk -v query="$query" -v tag_filter="$tag_filter" '
-    function print_item(kind,name,def,doc,    i,n,first,tag,first_idx,desc,tmp,doc_name,display_name) {
+    function print_item(kind,name,def,doc,    i,n,first,tag,first_idx,desc,tmp,doc_name,display_name,line,close_bracket) {
       if (query && name!=query) return
       if (!doc) doc="(no docs)"
       gsub(/\n?[ \t]*##![ \t]*/,"\n",doc)
@@ -80,13 +80,22 @@ EOF
       first_idx=0
       for (i=1;i<=n;i++) if (length(lines[i])) { first_idx=i; break }
       tag=""; desc=""
-      if (first_idx && match(lines[first_idx], /^\[([A-Za-z0-9_-]+)\][ \t]*(.*)$/, m)) {
-        tag = m[1]
-        doc_name = m[2]
-        lines[first_idx] = m[2]
+      if (first_idx && lines[first_idx] ~ /^\[[A-Za-z0-9_-]+\]/) {
+        line = lines[first_idx]
+        close_bracket = index(line, "]")
+        if (close_bracket > 0) {
+          tag = substr(line, 2, close_bracket-2)
+          doc_name = substr(line, close_bracket+1)
+          gsub(/^[ \t]+/, "", doc_name)
+          lines[first_idx] = doc_name
+        }
       }
       for (i=(first_idx?first_idx:1); i<=n; i++) {
-        if (match(lines[i], /^[ \t]*Desc:[ \t]*(.*)$/, m)) { desc = m[1]; break }
+        if (lines[i] ~ /^[ \t]*Desc:[ \t]*/) {
+          desc = lines[i]
+          sub(/^[ \t]*Desc:[ \t]*/,"", desc)
+          break
+        }
       }
       if (!length(desc)) {
         for (i=(first_idx?first_idx:1); i<=n; i++) {
@@ -119,9 +128,16 @@ EOF
 
     # Function: allow optional leading ws, optional "function", optional "()"
     /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)?[ \t]*\{/ {
-      match($0, /^[ \t]*(function[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\(\)?[ \t]*\{/, m)
+      line=$0
+      sub(/^[ \t]*/, "", line)
+      sub(/^function[ \t]+/, "", line)
+      if (match(line, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        cur_name = substr(line, RSTART, RLENGTH)
+      } else {
+        cur_name = ""
+      }
       flush_current()
-      cur_kind="function"; cur_name=m[2]; cur_def=$0
+      cur_kind="function"; cur_def=$0
       cur_doc = next_doc; next_doc=""
       next
     }
