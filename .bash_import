@@ -1,3 +1,4 @@
 source ~/.dot/.bash_aliases
 source ~/.dot/.bash_functions
 source ~/.dot/.bash_help
+source ~/.dot/.bash_prompt

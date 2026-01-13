@@ -1,0 +1,80 @@
+# ---- Custom prompt: host + cwd + git branch + env + (duration>10s) ----
+# Put this in ~/.bashrc
+
+if [[ $- == *i* ]]; then
+
+  # --- Git branch (only if we're in a git repo) ---
+  # Ex: (main)
+  __prompt_git_branch() {
+    command -v git >/dev/null 2>&1 || return 0
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+
+    local b
+    b="$(git symbolic-ref --quiet --short HEAD 2>/dev/null)" \
+      || b="$(git rev-parse --short HEAD 2>/dev/null)" \
+      || return 0
+
+    printf ' (%s)' "$b"
+  }
+
+  # --- Language environment (virtualenv / conda / pyenv) ---
+  # Ex: [venv:parent/.venv]
+  __prompt_lang_env() {
+    local tag=""
+
+    if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+      # VIRTUAL_ENV is the path to the activated venv :contentReference[oaicite:1]{index=1}
+      local env="${VIRTUAL_ENV%/}"         # trim trailing slash if any :contentReference[oaicite:2]{index=2}
+      local env_name="${env##*/}"          # basename :contentReference[oaicite:3]{index=3}
+      local env_parent="${env%/*}"         # dirname :contentReference[oaicite:4]{index=4}
+      local parent_name="${env_parent##*/}"# dirname basename :contentReference[oaicite:5]{index=5}
+
+      if [[ -n "$parent_name" && "$parent_name" != "$env_name" ]]; then
+        tag="venv:${parent_name}/${env_name}"
+      else
+        tag="venv:${env_name}"
+      fi
+
+    elif [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
+      tag="conda:${CONDA_DEFAULT_ENV}"
+    elif [[ -n "${PYENV_VERSION:-}" ]]; then
+      tag="pyenv:${PYENV_VERSION}"
+    fi
+
+    [[ -n "$tag" ]] && printf ' [%s]' "$tag"
+  }
+
+  # --- Command duration timer (show only if > 10s) ---
+  __prompt_cmd_start=""
+  __prompt_building=""
+  #
+  __prompt_preexec() {
+    # Avoid starting timers while we are building the prompt itself
+    [[ -n "${__prompt_building:-}" ]] && return
+    # DEBUG trap fires for each simple command; only set once per user command
+    [[ -n "${__prompt_cmd_start:-}" ]] && return
+    __prompt_cmd_start=$SECONDS
+  }
+
+  trap '__prompt_preexec' DEBUG
+
+  __prompt_command() {
+    __prompt_building=1
+
+    local duration=""
+    if [[ -n "${__prompt_cmd_start:-}" ]]; then
+      local elapsed=$(( SECONDS - __prompt_cmd_start ))
+      if (( elapsed > 10 )); then
+        duration=" {${elapsed}s}"
+      fi
+    fi
+
+    # [hostname cwd (git) [env] {12s}]$
+    PS1="[\h \W$(__prompt_git_branch)$(__prompt_lang_env)$duration]\\$ "
+
+    __prompt_cmd_start=""
+    unset __prompt_building
+  }
+
+  PROMPT_COMMAND=__prompt_command
+fi

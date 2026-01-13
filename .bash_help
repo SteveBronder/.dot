@@ -1,18 +1,3 @@
-##! [util] iforgot
-##! Desc: List documented aliases/functions or show details for one.
-##! Usage:
-##!   iforgot                 # show all with one-line summaries
-##!   iforgot <name>          # show full doc and definition for <name>
-##!   iforgot -f <tag>        # show only entries with the given tag
-##!   iforgot --help          # show help for iforgot
-##! Doc comments:
-##!   - Prefix each doc line with `##!` (leading indentation is fine).
-##!   - Keep the block immediately above the alias/function it documents.
-##!   - First line: `[tag] name` (tag optional, but recommended).
-##!   - Second line: `Desc: short description`.
-##!   - Follow with usage/examples/notes on later lines.
-##! Output columns:
-##!   - Summary view shows: <tag> <name> <summary>. Tag comes from the first line; summary comes from `Desc:`.
 iforgot() {
   local query=""
   local tag_filter=""
@@ -60,17 +45,54 @@ EOF
         ;;
     esac
   done
-  # If anything remains and no query captured yet, take the next token as query
+
   if [[ -z "$query" && $# -gt 0 ]]; then
     query="$1"
   fi
-  # Make sure these paths match your actual files
-  local files=(~/.dot/.bash_functions ~/.dot/.bash_aliases)
 
+  local files=(~/.dot/.bash_functions ~/.dot/.bash_aliases)
   for f in "${files[@]}"; do
     [[ -r "$f" ]] || continue
   done
 
+  # Helper to build a border line like +-----+----+------+
+  _iforgot_border() {
+    local w1="$1" w2="$2" w3="$3" s
+    printf -v s '%*s' "$((w1+2))" ''; s=${s// /-}; printf '+%s' "$s"
+    printf -v s '%*s' "$((w2+2))" ''; s=${s// /-}; printf '+%s' "$s"
+    printf -v s '%*s' "$((w3+2))" ''; s=${s// /-}; printf '+%s+\n' "$s"
+  }
+
+  # Summary table printer: reads tab-separated rows from stdin
+  _iforgot_print_table() {
+    local h1="Tag" h2="Name" h3="Description"
+    local w1=${#h1} w2=${#h2} w3=${#h3}
+    local -a rows=()
+    local line tag name desc
+
+    # Slurp rows (so we can compute widths)
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      rows+=("$line")
+      IFS=$'\t' read -r tag name desc <<<"$line"
+      (( ${#tag}  > w1 )) && w1=${#tag}
+      (( ${#name} > w2 )) && w2=${#name}
+      (( ${#desc} > w3 )) && w3=${#desc}
+    done
+
+    _iforgot_border "$w1" "$w2" "$w3"
+    printf '| %-*s | %-*s | %-*s |\n' "$w1" "$h1" "$w2" "$h2" "$w3" "$h3"
+    _iforgot_border "$w1" "$w2" "$w3"
+
+    for line in "${rows[@]}"; do
+      IFS=$'\t' read -r tag name desc <<<"$line"
+      printf '| %-*s | %-*s | %-*s |\n' "$w1" "$tag" "$w2" "$name" "$w3" "$desc"
+    done
+
+    _iforgot_border "$w1" "$w2" "$w3"
+  }
+
+  # Run extractor; in summary mode output tab-separated columns for table formatting
   awk -v query="$query" -v tag_filter="$tag_filter" '
     function print_item(kind,name,def,doc,    i,n,first,tag,first_idx,desc,tmp,doc_name,display_name,line,close_bracket) {
       if (query && name!=query) return
@@ -109,13 +131,15 @@ EOF
       display_name = name
       if (!length(display_name)) display_name = doc_name
       if (!length(display_name)) display_name = "(unknown)"
+
       if (query && name==query) {
         printf("%s %s (%s)\n", toupper(tag), display_name, kind)
         for (i=1;i<=n;i++) if (length(lines[i])) printf("  %s\n", lines[i])
         if (length(def)) printf("  Defined as: %s\n", def)
         printf("\n")
       } else if (!query) {
-        printf("%-10s %-16s %s\n", tag, display_name, desc)
+        # TAB-separated for later table formatting
+        printf("%s\t%s\t%s\n", tag, display_name, desc)
       }
     }
     function flush_current() {
@@ -123,10 +147,8 @@ EOF
       cur_kind=""; cur_name=""; cur_def=""; cur_doc=""
     }
 
-    # Accumulate docs for the *next* item
     /^[ \t]*##![ \t]*/ { next_doc = next_doc sprintf("%s\n", $0); next }
 
-    # Function: allow optional leading ws, optional "function", optional "()"
     /^[ \t]*(function[ \t]+)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(\)?[ \t]*\{/ {
       flush_current()
       line=$0
@@ -142,7 +164,6 @@ EOF
       next
     }
 
-    # Alias: allow leading ws
     /^[ \t]*alias[ \t]+[A-Za-z_][A-Za-z0-9_]*=/ {
       flush_current()
       line=$0
@@ -156,8 +177,8 @@ EOF
     END { flush_current() }
   ' "${files[@]}" | {
      if [[ -z "$query" ]]; then
-        printf "Available helpers (use '\''iforgot <name>'\'' for details):\n"
-        sort
+        # sort rows only (fast locale); header/borders printed after widths are known
+        LC_ALL=C iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null | LC_ALL=C sort | _iforgot_print_table
      else
         cat
      fi
