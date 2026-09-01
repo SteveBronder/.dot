@@ -108,6 +108,200 @@ cproj() {
   cd "$root" || return
 }
 
+##! [git] gotoremote
+##! Desc: Add another user's fork as a remote and check out one of their branches.
+##! Usage:
+##!   gotoremote [-w|--worktree|--worktree=<path>] <user>:<branch>
+##!   gotoremote [-w] <user> <branch>
+##!   gotoremote [-w] <https://host/user/repo/tree/branch>
+##! Examples:
+##!   gotoremote tmchow:fix/3304-reduce-sum-static-ref-type
+##!   gotoremote -w tmchow:fix/3304-reduce-sum-static-ref-type
+##!   gotoremote --worktree=../review tmchow:fix/3304-reduce-sum-static-ref-type
+##!   gotoremote https://github.com/tmchow/math/tree/fix/3304-reduce-sum-static-ref-type
+##! Options:
+##!   -w, --worktree          Check the branch out in a new git worktree and cd there.
+##!   --worktree=<path>       Same, but at an explicit path.
+##! Notes:
+##!   - Must be run inside a Git repo. The fork URL is `origin`'s URL with the
+##!     owner swapped, so the protocol (ssh, https, ...) and host are preserved.
+##!   - Adds remote <user> if missing, fetches <branch>, then checks out a local
+##!     branch of the same name tracking <user>/<branch>.
+##!   - Re-running fast-forwards an existing local branch; it never force-updates
+##!     or discards local work.
+##!   - The default worktree path is ../<repo>-<user>-<branch> beside the repo root.
+gotoremote() {
+  local spec="" use_worktree="" wt_path="" wt_root="" wt_slug=""
+  local user="" branch="" rest="" proto=""
+  local origin_url="" base="" repo="" new_url="" remote_url="" upstream=""
+
+  if [ $# -eq 0 ]; then
+    echo "gotoremote: usage: gotoremote [-w] <user>:<branch>" >&2
+    return 1
+  fi
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help)
+        cat <<'EOF'
+gotoremote - add another user's fork as a remote and check out their branch.
+Usage:
+  gotoremote [-w|--worktree|--worktree=<path>] <user>:<branch>
+  gotoremote [-w] <user> <branch>
+  gotoremote [-w] <https://host/user/repo/tree/branch>
+Options:
+  -w, --worktree        Check the branch out in a new git worktree and cd there.
+  --worktree=<path>     Same, but at an explicit path.
+  -h, --help            Show this help and exit.
+Examples:
+  gotoremote tmchow:fix/3304-reduce-sum-static-ref-type
+  gotoremote -w tmchow:fix/3304-reduce-sum-static-ref-type
+EOF
+        return 0
+        ;;
+      -w|--worktree)
+        use_worktree=1
+        shift
+        ;;
+      --worktree=*)
+        use_worktree=1
+        wt_path="${1#--worktree=}"
+        if [ -z "$wt_path" ]; then
+          echo "gotoremote: --worktree= needs a path" >&2
+          return 1
+        fi
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        echo "gotoremote: unknown option: $1" >&2
+        return 1
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  spec="$1"
+  if [ -z "$spec" ]; then
+    echo "gotoremote: usage: gotoremote [-w] <user>:<branch>" >&2
+    return 1
+  fi
+
+  case "$spec" in
+    http://*|https://*|ssh://*)
+      rest="${spec%/}"
+      rest="${rest#*://}"
+      rest="${rest#*/}"          # drop host, leaving <user>/<repo>/tree/<branch>
+      user="${rest%%/*}"
+      branch="${rest#*/tree/}"
+      if [ -z "$user" ] || [ "$branch" = "$rest" ]; then
+        echo "gotoremote: cannot parse <user>/<repo>/tree/<branch> out of: $spec" >&2
+        return 1
+      fi
+      ;;
+    *:*)
+      user="${spec%%:*}"
+      branch="${spec#*:}"
+      ;;
+    *)
+      user="$spec"
+      branch="$2"
+      ;;
+  esac
+
+  if [ -z "$user" ] || [ -z "$branch" ]; then
+    echo "gotoremote: usage: gotoremote <user>:<branch>" >&2
+    return 1
+  fi
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "gotoremote: not inside a Git repository" >&2
+    return 1
+  }
+
+  origin_url=$(git config --get remote.origin.url 2>/dev/null)
+  if [ -z "$origin_url" ]; then
+    rest=$(git remote | head -n 1)
+    [ -n "$rest" ] && origin_url=$(git config --get "remote.$rest.url" 2>/dev/null)
+  fi
+  if [ -z "$origin_url" ]; then
+    echo "gotoremote: no remotes configured, cannot infer the repository URL" >&2
+    return 1
+  fi
+
+  # Swap the owner segment of origin's URL, keeping its protocol so that the
+  # existing ssh keys / credential helper keep working.
+  base="${origin_url%/}"
+  base="${base%.git}"
+  repo="${base##*/}"
+  rest="${base%/*}"              # everything up to and including the owner
+  if [ -z "$repo" ] || [ "$rest" = "$base" ]; then
+    echo "gotoremote: cannot infer <owner>/<repo> from origin URL: $origin_url" >&2
+    return 1
+  fi
+  if [ "${rest##*/}" = "$rest" ]; then
+    proto="${rest%%:*}:"         # scp-like git@host:owner
+  else
+    proto="${rest%/*}/"          # https://host/owner, ssh://host/owner, /path/owner
+  fi
+  new_url="${proto}${user}/${repo}.git"
+
+  remote_url=$(git config --get "remote.$user.url" 2>/dev/null)
+  if [ -n "$remote_url" ]; then
+    if [ "${remote_url%.git}" != "${new_url%.git}" ]; then
+      echo "gotoremote: remote '$user' already points at $remote_url (leaving as-is)" >&2
+    fi
+  else
+    git remote add "$user" "$new_url" || return 1
+    remote_url="$new_url"
+    echo "gotoremote: added remote $user -> $new_url"
+  fi
+
+  git fetch "$user" "+refs/heads/${branch}:refs/remotes/${user}/${branch}" || return 1
+
+  if [ -n "$use_worktree" ]; then
+    wt_root=$(git rev-parse --show-toplevel) || return 1
+    if [ -z "$wt_path" ]; then
+      wt_slug=$(printf '%s' "$branch" | tr '/' '-')
+      wt_path="${wt_root%/*}/${repo}-${user}-${wt_slug}"
+    fi
+    if [ -e "$wt_path" ]; then
+      echo "gotoremote: $wt_path already exists, entering it without touching it" >&2
+    elif git show-ref --verify --quiet "refs/heads/${branch}"; then
+      git worktree add "$wt_path" "$branch" || return 1
+    else
+      git worktree add --track -b "$branch" "$wt_path" "${user}/${branch}" || return 1
+    fi
+    cd "$wt_path" || return 1
+    echo "gotoremote: worktree $(pwd) on '$branch' from ${user} (${remote_url})"
+    return 0
+  fi
+
+  if git show-ref --verify --quiet "refs/heads/${branch}"; then
+    git checkout "$branch" || return 1
+    upstream=$(git rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2>/dev/null)
+    if [ "$upstream" = "${user}/${branch}" ]; then
+      git merge --ff-only "${user}/${branch}" || {
+        echo "gotoremote: local '$branch' has diverged from ${user}/${branch}; left untouched" >&2
+        return 1
+      }
+    else
+      echo "gotoremote: local branch '$branch' already exists (upstream: ${upstream:-none})" >&2
+      echo "gotoremote: leaving it untouched; to take theirs: git reset --hard ${user}/${branch}" >&2
+      return 1
+    fi
+  else
+    git checkout -b "$branch" --track "${user}/${branch}" || return 1
+  fi
+
+  echo "gotoremote: on '$branch' from ${user} (${remote_url})"
+}
+
 ##! [nav] cdf
 ##! Desc: Change directory to the directory containing a file.
 ##! Usage:
