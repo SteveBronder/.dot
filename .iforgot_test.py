@@ -11,6 +11,19 @@ FUNC_RE = re.compile(r"^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)?\s*\{
 ALIAS_RE = re.compile(r"^\s*alias\s+([A-Za-z_][A-Za-z0-9_]*)=")
 
 
+def ascii_translit(text: str) -> str:
+    """Mirror iforgot, which pipes its table rows through iconv ASCII//TRANSLIT."""
+    result = subprocess.run(
+        ["iconv", "-f", "UTF-8", "-t", "ASCII//TRANSLIT"],
+        input=text,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "LC_ALL": "C"},
+    )
+    return result.stdout
+
+
 def parse_doc_block(lines, kind: str, default_name: str):
     """Return (tag, desc, display_name) from a block of ##! lines."""
     cleaned = []
@@ -45,7 +58,7 @@ def parse_doc_block(lines, kind: str, default_name: str):
     if not desc:
         desc = "(no docs)"
     display_name = default_name or doc_name or "(unknown)"
-    return tag, desc, display_name
+    return tag, ascii_translit(desc), display_name
 
 
 def collect_expected():
@@ -87,13 +100,22 @@ def collect_actual():
         env={**os.environ, "HOME": str(Path.home())},
     )
     actual = {}
+    header_seen = False
     for line in result.stdout.splitlines():
-        if not line.strip() or line.startswith("Available helpers"):
+        # Skip blank lines and table borders like +-----+----+------+
+        if not line.strip() or line.startswith("+"):
             continue
-        parts = line.split(None, 2)
+        if not (line.startswith("|") and line.endswith("|")):
+            raise AssertionError(f"Unexpected iforgot line format: {line!r}")
+        parts = [p.strip() for p in line[1:-1].split("|", 2)]
         if len(parts) < 3:
             raise AssertionError(f"Unexpected iforgot line format: {line!r}")
-        tag, name, desc = parts[0], parts[1], parts[2].strip()
+        tag, name, desc = parts
+        if not header_seen:
+            header_seen = True
+            if (tag, name, desc) != ("Tag", "Name", "Description"):
+                raise AssertionError(f"Unexpected iforgot header: {line!r}")
+            continue
         actual[name] = (tag, desc)
     return actual
 

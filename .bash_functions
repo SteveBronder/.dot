@@ -302,6 +302,119 @@ EOF
   echo "gotoremote: on '$branch' from ${user} (${remote_url})"
 }
 
+##! [git] gototree
+##! Desc: Check a branch out in a worktree under <repo>/.worktree/<branch> and cd there.
+##! Usage:
+##!   gototree <branch>
+##! Examples:
+##!   gototree stable-inc-beta
+##!   gototree fix/3304-reduce-sum
+##! Notes:
+##!   - Must be run inside a Git repo. `.worktree/` always lives in the main
+##!     checkout's root, even when called from inside another worktree.
+##!   - Uses the local branch if it exists, else tracks <remote>/<branch> (fetching
+##!     it from origin if needed), else creates a new branch from HEAD.
+##!   - If the worktree already exists it just cds into it.
+##!   - Adds `.worktree/` to .git/info/exclude so it never shows as untracked.
+gototree() {
+  local branch="$1" root="" wt_path="" exclude="" remote_ref=""
+
+  if [ -z "$branch" ]; then
+    echo "gototree: usage: gototree <branch>" >&2
+    return 1
+  fi
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "gototree: not inside a Git repository" >&2
+    return 1
+  }
+
+  # The first entry of `git worktree list` is always the main checkout.
+  root=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+  wt_path="$root/.worktree/$branch"
+
+  exclude=$(git rev-parse --git-common-dir)/info/exclude
+  case "$exclude" in /*) ;; *) exclude="$(pwd)/$exclude" ;; esac
+  if ! grep -qxF '.worktree/' "$exclude" 2>/dev/null; then
+    mkdir -p "${exclude%/*}" && echo '.worktree/' >> "$exclude"
+  fi
+
+  if [ -e "$wt_path" ]; then
+    echo "gototree: $wt_path already exists, entering it" >&2
+  elif git show-ref --verify --quiet "refs/heads/${branch}"; then
+    git worktree add "$wt_path" "$branch" || return 1
+  else
+    remote_ref=$(git for-each-ref --format='%(refname:short)' "refs/remotes/*/${branch}" | head -n 1)
+    if [ -z "$remote_ref" ] && git remote | grep -qx origin \
+        && git fetch -q origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" 2>/dev/null; then
+      remote_ref="origin/${branch}"
+    fi
+    if [ -n "$remote_ref" ]; then
+      git worktree add --track -b "$branch" "$wt_path" "$remote_ref" || return 1
+    else
+      echo "gototree: no local or remote branch '$branch', creating it from HEAD" >&2
+      git worktree add -b "$branch" "$wt_path" || return 1
+    fi
+  fi
+
+  cd "$wt_path" || return 1
+  echo "gototree: worktree $(pwd) on '$branch'"
+}
+
+##! [git] removetree
+##! Desc: Remove the worktree at <repo>/.worktree/<branch> made by gototree.
+##! Usage:
+##!   removetree [-f|--force] <branch>
+##! Examples:
+##!   removetree stable-inc-beta
+##!   removetree -f fix/3304-reduce-sum
+##! Options:
+##!   -f, --force   Remove even if the worktree has uncommitted changes.
+##! Notes:
+##!   - The branch itself is kept; delete it with `git branch -d <branch>`.
+##!   - If you are inside the worktree being removed, cds to the repo root first.
+removetree() {
+  local force="" branch="" root="" wt_path="" here="" dir=""
+
+  case "$1" in
+    -f|--force) force="--force"; shift ;;
+  esac
+  branch="$1"
+
+  if [ -z "$branch" ]; then
+    echo "removetree: usage: removetree [-f] <branch>" >&2
+    return 1
+  fi
+
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || {
+    echo "removetree: not inside a Git repository" >&2
+    return 1
+  }
+
+  root=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+  wt_path="$root/.worktree/$branch"
+
+  if [ ! -d "$wt_path" ]; then
+    echo "removetree: no worktree at $wt_path" >&2
+    return 1
+  fi
+
+  here=$(pwd -P)
+  case "$here/" in
+    "$(cd "$wt_path" && pwd -P)/"*) cd "$root" || return 1 ;;
+  esac
+
+  git -C "$root" worktree remove $force "$wt_path" || return 1
+
+  # Clean up empty parent dirs left behind by branch names containing '/'.
+  dir="${wt_path%/*}"
+  while [ "$dir" != "$root/.worktree" ] && rmdir "$dir" 2>/dev/null; do
+    dir="${dir%/*}"
+  done
+
+  echo "removetree: removed $wt_path (branch '$branch' kept)"
+}
+
 ##! [nav] cdf
 ##! Desc: Change directory to the directory containing a file.
 ##! Usage:
