@@ -306,21 +306,48 @@ EOF
 ##! Desc: Check a branch out in a worktree under <repo>/.worktree/<branch> and cd there.
 ##! Usage:
 ##!   gototree <branch>
+##!   gototree <user>:<branch>
+##!   gototree <https://host/user/repo/tree/branch>
 ##! Examples:
 ##!   gototree stable-inc-beta
 ##!   gototree fix/3304-reduce-sum
+##!   gototree jachymb:feature/bfgs-update-rank-two
 ##! Notes:
 ##!   - Must be run inside a Git repo. `.worktree/` always lives in the main
 ##!     checkout's root, even when called from inside another worktree.
 ##!   - Uses the local branch if it exists, else tracks <remote>/<branch> (fetching
 ##!     it from origin if needed), else creates a new branch from HEAD.
+##!   - <user>:<branch> (or a fork URL) goes through `gotoremote`, which adds
+##!     the fork as remote <user> and tracks <user>/<branch>. The worktree is
+##!     still .worktree/<branch>, so `removetree <branch>` removes it.
 ##!   - If the worktree already exists it just cds into it.
 ##!   - Adds `.worktree/` to .git/info/exclude so it never shows as untracked.
 gototree() {
-  local branch="$1" root="" wt_path="" exclude="" remote_ref=""
+  local spec="$1" branch="$1" fork="" root="" wt_path="" exclude="" remote_ref=""
 
+  if [ -z "$spec" ]; then
+    echo "gototree: usage: gototree [<user>:]<branch>" >&2
+    return 1
+  fi
+
+  # Git branch names cannot contain ':', so one means a fork spec.
+  case "$spec" in
+    http://*|https://*|ssh://*)
+      fork=1
+      branch="${spec%/}"
+      branch="${branch#*/tree/}"
+      if [ "$branch" = "${spec%/}" ]; then
+        echo "gototree: cannot parse <user>/<repo>/tree/<branch> out of: $spec" >&2
+        return 1
+      fi
+      ;;
+    *:*)
+      fork=1
+      branch="${spec#*:}"
+      ;;
+  esac
   if [ -z "$branch" ]; then
-    echo "gototree: usage: gototree <branch>" >&2
+    echo "gototree: usage: gototree [<user>:]<branch>" >&2
     return 1
   fi
 
@@ -337,6 +364,11 @@ gototree() {
   case "$exclude" in /*) ;; *) exclude="$(pwd)/$exclude" ;; esac
   if ! grep -qxF '.worktree/' "$exclude" 2>/dev/null; then
     mkdir -p "${exclude%/*}" && echo '.worktree/' >> "$exclude"
+  fi
+
+  if [ -n "$fork" ]; then
+    gotoremote --worktree="$wt_path" "$spec"
+    return
   fi
 
   if [ -e "$wt_path" ]; then

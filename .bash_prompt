@@ -27,7 +27,7 @@ if [[ $- == *i* ]]; then
       local env="${VIRTUAL_ENV%/}"         # trim trailing slash if any :contentReference[oaicite:2]{index=2}
       local env_name="${env##*/}"          # basename :contentReference[oaicite:3]{index=3}
       local env_parent="${env%/*}"         # dirname :contentReference[oaicite:4]{index=4}
-      local parent_name="${env_parent##*/}"# dirname basename :contentReference[oaicite:5]{index=5}
+      local parent_name="${env_parent##*/}" # dirname basename :contentReference[oaicite:5]{index=5}
 
       if [[ -n "$parent_name" && "$parent_name" != "$env_name" ]]; then
         tag="venv:${parent_name}/${env_name}"
@@ -56,25 +56,25 @@ if [[ $- == *i* ]]; then
     __prompt_cmd_start=$SECONDS
   }
 
-  trap '__prompt_preexec' DEBUG
+  # trap '__prompt_preexec' DEBUG  # disabled: causes conflict with VS Code shell integration and Claude Code
 
   __prompt_command() {
     __prompt_building=1
 
-    local duration=""
-    if [[ -n "${__prompt_cmd_start:-}" ]]; then
-      local elapsed=$(( SECONDS - __prompt_cmd_start ))
-      if (( elapsed > 10 )); then
-        duration=" {${elapsed}s}"
-      fi
-    fi
-
+#    local duration=""
+#    if [[ -n "${__prompt_cmd_start:-}" ]]; then
+#      local elapsed=$(( SECONDS - __prompt_cmd_start ))
+#      if (( elapsed > 10 )); then
+#        duration=" {${elapsed}s}"
+#      fi
+#    fi
+#
     # [hostname cwd (git) [env] {12s}]$
-    PS1="[\h \W$(__prompt_git_branch)$(__prompt_lang_env)$duration]\\$ "
+    PS1="[\h \W$(__prompt_git_branch)$(__prompt_lang_env)]\\$ "
 
     __prompt_cmd_start=""
     unset __prompt_building
   }
 
-  PROMPT_COMMAND=__prompt_command
+#  PROMPT_COMMAND=__prompt_command
 fi
